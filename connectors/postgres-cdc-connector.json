@@ -1,0 +1,26 @@
+{
+  "name": "atlasflow-postgres-cdc",
+  "config": {
+    "connector.class": "io.debezium.connector.postgresql.PostgresConnector",
+    "tasks.max": "1",
+    "database.hostname": "postgres",
+    "database.port": "5432",
+    "database.user": "atlasflow_cdc",
+    "database.password": "__CDC_PASSWORD__",
+    "database.dbname": "atlasflow_ops",
+    "topic.prefix": "atlasflow",
+    "plugin.name": "pgoutput",
+    "slot.name": "atlasflow_ops_slot",
+    "publication.name": "atlasflow_publication",
+    "publication.autocreate.mode": "disabled",
+    "schema.include.list": "public",
+    "table.include.list": "public.customers,public.orders,public.inventory_balances,public.carriers,public.shipments,public.tracking_events,public.disruptions",
+    "snapshot.mode": "initial",
+    "tombstones.on.delete": "false",
+    "decimal.handling.mode": "string",
+    "transforms": "route",
+    "transforms.route.type": "org.apache.kafka.connect.transforms.RegexRouter",
+    "transforms.route.regex": "atlasflow\\.public\\..*",
+    "transforms.route.replacement": "atlasflow.cdc.v1"
+  }
+}

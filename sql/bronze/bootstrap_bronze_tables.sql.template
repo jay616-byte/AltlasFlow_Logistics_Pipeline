@@ -1,0 +1,15 @@
+SET 'execution.runtime-mode' = 'streaming';
+CREATE CATALOG atlasflow WITH (
+  'type' = 'iceberg', 'catalog-impl' = 'org.apache.iceberg.rest.RESTCatalog',
+  'uri' = 'http://iceberg-rest:8181', 'warehouse' = 's3://warehouse/',
+  'io-impl' = 'org.apache.iceberg.aws.s3.S3FileIO',
+  's3.endpoint' = 'http://object-store:9000',
+  's3.access-key-id' = '__RUSTFS_ACCESS_KEY__',
+  's3.secret-access-key' = '__RUSTFS_SECRET_KEY__', 's3.path-style-access' = 'true'
+);
+CREATE DATABASE IF NOT EXISTS atlasflow.bronze;
+CREATE TABLE IF NOT EXISTS atlasflow.bronze.cdc_events (
+  kafka_key STRING, raw_payload STRING, topic_name STRING,
+  partition_id INT, offset_value BIGINT,
+  kafka_timestamp TIMESTAMP_LTZ(3), ingested_at TIMESTAMP_LTZ(3)
+) WITH ('format-version' = '2', 'write.format.default' = 'parquet');

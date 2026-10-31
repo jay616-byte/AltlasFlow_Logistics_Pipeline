@@ -1,0 +1,29 @@
+SET 'execution.runtime-mode' = 'streaming';
+CREATE CATALOG atlasflow WITH (
+  'type' = 'iceberg', 'catalog-impl' = 'org.apache.iceberg.rest.RESTCatalog',
+  'uri' = 'http://iceberg-rest:8181', 'warehouse' = 's3://warehouse/',
+  'io-impl' = 'org.apache.iceberg.aws.s3.S3FileIO',
+  's3.endpoint' = 'http://object-store:9000',
+  's3.access-key-id' = '__RUSTFS_ACCESS_KEY__',
+  's3.secret-access-key' = '__RUSTFS_SECRET_KEY__', 's3.path-style-access' = 'true'
+);
+CREATE DATABASE IF NOT EXISTS atlasflow.silver;
+CREATE TABLE IF NOT EXISTS atlasflow.silver.cdc_changes (
+  source_table STRING, operation STRING, entity_id STRING, event_time TIMESTAMP_LTZ(3),
+  customer_id STRING, customer_name STRING, customer_segment STRING, customer_country STRING,
+  order_id STRING, external_order_ref STRING, order_customer_id STRING, order_status STRING,
+  product_sku STRING, order_quantity INT, order_value STRING, currency STRING,
+  order_created_at STRING, promised_delivery_at STRING, destination_country STRING,
+  warehouse_id STRING, warehouse_name STRING, region STRING,
+  on_hand_quantity INT, reserved_quantity INT, damaged_quantity INT,
+  carrier_id STRING, carrier_name STRING, service_level STRING, home_region STRING,
+  shipment_id STRING, shipment_order_id STRING, shipment_carrier_id STRING,
+  origin_warehouse_id STRING, shipment_status STRING, planned_arrival_at STRING, actual_delivery_at STRING,
+  tracking_event_id STRING, tracking_shipment_id STRING, tracking_event_type STRING,
+  tracking_event_time STRING, tracking_location STRING, tracking_delay_minutes INT,
+  disruption_id STRING, disruption_shipment_id STRING, disruption_type STRING,
+  disruption_severity STRING, disruption_location STRING, disruption_started_at STRING,
+  disruption_expected_delay_minutes INT, disruption_active STRING,
+  quality_status STRING, kafka_topic STRING, kafka_partition INT, kafka_offset BIGINT,
+  raw_payload STRING, ingested_at TIMESTAMP_LTZ(3)
+) WITH ('format-version' = '2', 'write.format.default' = 'parquet');

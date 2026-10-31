@@ -1,0 +1,24 @@
+SET 'execution.runtime-mode' = 'streaming';
+CREATE CATALOG atlasflow WITH (
+  'type' = 'iceberg', 'catalog-impl' = 'org.apache.iceberg.rest.RESTCatalog',
+  'uri' = 'http://iceberg-rest:8181', 'warehouse' = 's3://warehouse/',
+  'io-impl' = 'org.apache.iceberg.aws.s3.S3FileIO',
+  's3.endpoint' = 'http://object-store:9000',
+  's3.access-key-id' = '__RUSTFS_ACCESS_KEY__',
+  's3.secret-access-key' = '__RUSTFS_SECRET_KEY__', 's3.path-style-access' = 'true'
+);
+CREATE DATABASE IF NOT EXISTS atlasflow.gold;
+CREATE TABLE atlasflow.gold.shipment_control_tower (
+  shipment_id STRING,
+  order_id STRING, external_order_ref STRING,
+  customer_id STRING, customer_name STRING, customer_segment STRING,
+  shipment_status STRING, carrier_id STRING, carrier_name STRING,
+  origin_warehouse_id STRING, warehouse_region STRING, destination_country STRING,
+  product_sku STRING, order_quantity INT, available_to_promise INT,
+  latest_tracking_event_type STRING, latest_tracking_event_time STRING,
+  latest_tracking_location STRING, tracking_delay_minutes INT,
+  active_disruption_count BIGINT, expected_disruption_delay_minutes INT,
+  inventory_shortage_flag BOOLEAN, risk_level STRING, primary_risk_reason STRING,
+  refreshed_at TIMESTAMP_LTZ(3), refresh_id STRING,
+  PRIMARY KEY (shipment_id) NOT ENFORCED
+) WITH ('format-version' = '2', 'write.format.default' = 'parquet', 'write.upsert.enabled' = 'true');

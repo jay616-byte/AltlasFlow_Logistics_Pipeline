@@ -1,0 +1,110 @@
+SET 'execution.runtime-mode' = 'streaming';
+SET 'execution.checkpointing.interval' = '10s';
+SET 'execution.checkpointing.mode' = 'EXACTLY_ONCE';
+SET 'execution.checkpointing.timeout' = '60s';
+SET 'execution.checkpointing.tolerable-failed-checkpoints' = '3';
+SET 'state.checkpoints.dir' = 'file:///opt/flink/checkpoints';
+SET 'state.savepoints.dir' = 'file:///opt/flink/savepoints';
+SET 'table.local-time-zone' = 'UTC';
+SET 'table.dynamic-table-options.enabled' = 'true';
+SET 'pipeline.name' = 'atlasflow-silver-cdc-normalize';
+CREATE CATALOG atlasflow WITH (
+  'type' = 'iceberg', 'catalog-impl' = 'org.apache.iceberg.rest.RESTCatalog',
+  'uri' = 'http://iceberg-rest:8181', 'warehouse' = 's3://warehouse/',
+  'io-impl' = 'org.apache.iceberg.aws.s3.S3FileIO',
+  's3.endpoint' = 'http://object-store:9000',
+  's3.access-key-id' = '__RUSTFS_ACCESS_KEY__',
+  's3.secret-access-key' = '__RUSTFS_SECRET_KEY__', 's3.path-style-access' = 'true'
+);
+
+CREATE TEMPORARY TABLE bronze_source (
+  kafka_key STRING, raw_payload STRING, topic_name STRING, partition_id INT,
+  offset_value BIGINT, kafka_timestamp TIMESTAMP_LTZ(3), ingested_at TIMESTAMP_LTZ(3)
+) WITH (
+  'connector' = 'iceberg', 'catalog-name' = 'atlasflow', 'catalog-type' = 'rest',
+  'catalog-database' = 'bronze', 'catalog-table' = 'cdc_events',
+  'uri' = 'http://iceberg-rest:8181', 'warehouse' = 's3://warehouse/',
+  'io-impl' = 'org.apache.iceberg.aws.s3.S3FileIO',
+  's3.endpoint' = 'http://object-store:9000',
+  's3.access-key-id' = '__RUSTFS_ACCESS_KEY__',
+  's3.secret-access-key' = '__RUSTFS_SECRET_KEY__', 's3.path-style-access' = 'true',
+  'streaming' = 'true', 'starting-strategy' = 'TABLE_SCAN_THEN_INCREMENTAL', 'monitor-interval' = '5s'
+);
+
+INSERT INTO atlasflow.silver.cdc_changes
+SELECT
+  source_table, operation, entity_id,
+  TO_TIMESTAMP_LTZ(TRY_CAST(JSON_VALUE(event_json, '$.ts_ms' NULL ON EMPTY NULL ON ERROR) AS BIGINT), 3),
+  JSON_VALUE(event_json, '$.after.customer_id' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.customer_name' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.customer_segment' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.country_code' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.order_id' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.external_order_ref' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.customer_id' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.status' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.product_sku' NULL ON EMPTY NULL ON ERROR),
+  TRY_CAST(JSON_VALUE(event_json, '$.after.quantity' NULL ON EMPTY NULL ON ERROR) AS INT),
+  JSON_VALUE(event_json, '$.after.order_value' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.currency' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.order_created_at' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.promised_delivery_at' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.destination_country' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.warehouse_id' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.warehouse_name' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.region' NULL ON EMPTY NULL ON ERROR),
+  TRY_CAST(JSON_VALUE(event_json, '$.after.on_hand_quantity' NULL ON EMPTY NULL ON ERROR) AS INT),
+  TRY_CAST(JSON_VALUE(event_json, '$.after.reserved_quantity' NULL ON EMPTY NULL ON ERROR) AS INT),
+  TRY_CAST(JSON_VALUE(event_json, '$.after.damaged_quantity' NULL ON EMPTY NULL ON ERROR) AS INT),
+  JSON_VALUE(event_json, '$.after.carrier_id' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.carrier_name' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.service_level' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.home_region' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.shipment_id' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.order_id' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.carrier_id' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.origin_warehouse_id' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.status' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.planned_arrival_at' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.actual_delivery_at' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.event_id' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.shipment_id' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.event_type' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.event_time' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.location' NULL ON EMPTY NULL ON ERROR),
+  TRY_CAST(JSON_VALUE(event_json, '$.after.delay_minutes' NULL ON EMPTY NULL ON ERROR) AS INT),
+  JSON_VALUE(event_json, '$.after.disruption_id' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.shipment_id' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.disruption_type' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.severity' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.location' NULL ON EMPTY NULL ON ERROR),
+  JSON_VALUE(event_json, '$.after.started_at' NULL ON EMPTY NULL ON ERROR),
+  TRY_CAST(JSON_VALUE(event_json, '$.after.expected_delay_minutes' NULL ON EMPTY NULL ON ERROR) AS INT),
+  JSON_VALUE(event_json, '$.after.active' NULL ON EMPTY NULL ON ERROR),
+  CASE
+    WHEN raw_payload IS JSON OBJECT
+     AND source_table IN ('customers', 'orders', 'inventory_balances', 'carriers', 'shipments', 'tracking_events', 'disruptions')
+     AND operation IN ('c', 'r', 'u', 'd') THEN 'VALID'
+    ELSE 'INVALID'
+  END,
+  topic_name, partition_id, offset_value, raw_payload, ingested_at
+FROM (
+  SELECT *,
+    JSON_VALUE(event_json, '$.source.table' NULL ON EMPTY NULL ON ERROR) AS source_table,
+    JSON_VALUE(event_json, '$.op' NULL ON EMPTY NULL ON ERROR) AS operation,
+    CASE JSON_VALUE(event_json, '$.source.table' NULL ON EMPTY NULL ON ERROR)
+      WHEN 'customers' THEN COALESCE(JSON_VALUE(event_json, '$.after.customer_id' NULL ON EMPTY NULL ON ERROR), JSON_VALUE(event_json, '$.before.customer_id' NULL ON EMPTY NULL ON ERROR))
+      WHEN 'orders' THEN COALESCE(JSON_VALUE(event_json, '$.after.order_id' NULL ON EMPTY NULL ON ERROR), JSON_VALUE(event_json, '$.before.order_id' NULL ON EMPTY NULL ON ERROR))
+      WHEN 'inventory_balances' THEN CONCAT(COALESCE(JSON_VALUE(event_json, '$.after.warehouse_id' NULL ON EMPTY NULL ON ERROR), JSON_VALUE(event_json, '$.before.warehouse_id' NULL ON EMPTY NULL ON ERROR)), '|', COALESCE(JSON_VALUE(event_json, '$.after.product_sku' NULL ON EMPTY NULL ON ERROR), JSON_VALUE(event_json, '$.before.product_sku' NULL ON EMPTY NULL ON ERROR)))
+      WHEN 'carriers' THEN COALESCE(JSON_VALUE(event_json, '$.after.carrier_id' NULL ON EMPTY NULL ON ERROR), JSON_VALUE(event_json, '$.before.carrier_id' NULL ON EMPTY NULL ON ERROR))
+      WHEN 'shipments' THEN COALESCE(JSON_VALUE(event_json, '$.after.shipment_id' NULL ON EMPTY NULL ON ERROR), JSON_VALUE(event_json, '$.before.shipment_id' NULL ON EMPTY NULL ON ERROR))
+      WHEN 'tracking_events' THEN COALESCE(JSON_VALUE(event_json, '$.after.event_id' NULL ON EMPTY NULL ON ERROR), JSON_VALUE(event_json, '$.before.event_id' NULL ON EMPTY NULL ON ERROR))
+      WHEN 'disruptions' THEN COALESCE(JSON_VALUE(event_json, '$.after.disruption_id' NULL ON EMPTY NULL ON ERROR), JSON_VALUE(event_json, '$.before.disruption_id' NULL ON EMPTY NULL ON ERROR))
+      ELSE NULL
+    END AS entity_id
+  FROM (
+    SELECT *,
+      COALESCE(JSON_QUERY(raw_payload, '$.payload' NULL ON EMPTY NULL ON ERROR), raw_payload) AS event_json
+    FROM bronze_source
+  ) payload_source
+) normalized;

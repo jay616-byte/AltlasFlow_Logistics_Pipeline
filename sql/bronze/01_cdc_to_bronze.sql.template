@@ -1,0 +1,38 @@
+SET 'execution.runtime-mode' = 'streaming';
+SET 'execution.checkpointing.interval' = '10s';
+SET 'execution.checkpointing.mode' = 'EXACTLY_ONCE';
+SET 'execution.checkpointing.timeout' = '60s';
+SET 'execution.checkpointing.tolerable-failed-checkpoints' = '3';
+SET 'state.checkpoints.dir' = 'file:///opt/flink/checkpoints';
+SET 'state.savepoints.dir' = 'file:///opt/flink/savepoints';
+SET 'pipeline.name' = 'atlasflow-bronze-cdc';
+
+CREATE CATALOG atlasflow WITH (
+  'type' = 'iceberg', 'catalog-impl' = 'org.apache.iceberg.rest.RESTCatalog',
+  'uri' = 'http://iceberg-rest:8181', 'warehouse' = 's3://warehouse/',
+  'io-impl' = 'org.apache.iceberg.aws.s3.S3FileIO',
+  's3.endpoint' = 'http://object-store:9000',
+  's3.access-key-id' = '__RUSTFS_ACCESS_KEY__',
+  's3.secret-access-key' = '__RUSTFS_SECRET_KEY__', 's3.path-style-access' = 'true'
+);
+
+CREATE TEMPORARY TABLE kafka_cdc_source (
+  kafka_key STRING, raw_payload STRING,
+  topic_name STRING METADATA FROM 'topic' VIRTUAL,
+  partition_id INT METADATA FROM 'partition' VIRTUAL,
+  offset_value BIGINT METADATA FROM 'offset' VIRTUAL,
+  kafka_timestamp TIMESTAMP_LTZ(3) METADATA FROM 'timestamp' VIRTUAL,
+  ingested_at AS PROCTIME()
+) WITH (
+  'connector' = 'kafka', 'topic' = 'atlasflow.cdc.v1',
+  'properties.bootstrap.servers' = 'kafka:19092',
+  'properties.group.id' = 'atlasflow-bronze-v1',
+  'scan.startup.mode' = 'earliest-offset',
+  'key.format' = 'raw', 'key.fields' = 'kafka_key', 'key.raw.charset' = 'UTF-8',
+  'value.format' = 'raw', 'value.raw.charset' = 'UTF-8', 'value.fields-include' = 'EXCEPT_KEY'
+);
+
+INSERT INTO atlasflow.bronze.cdc_events  
+(kafka_key, raw_payload, topic_name, partition_id, offset_value, kafka_timestamp, ingested_at)
+SELECT kafka_key, raw_payload, topic_name, partition_id, offset_value, kafka_timestamp, ingested_at
+FROM kafka_cdc_source;

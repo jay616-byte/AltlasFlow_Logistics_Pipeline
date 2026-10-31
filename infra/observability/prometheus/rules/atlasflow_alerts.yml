@@ -1,0 +1,38 @@
+groups:
+  - name: atlasflow-availability
+    rules:
+      - alert: AtlasFlowExporterScrapeFailed
+        expr: up{job=~"prometheus|blackbox-exporter|kafka-exporter|container-metrics"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "AtlasFlow monitoring target is not scrapeable"
+          description: "Prometheus cannot scrape {{ $labels.job }} at {{ $labels.instance }} for at least two minutes."
+
+      - alert: AtlasFlowHTTPProbeFailed
+        expr: probe_success{job="http-probes"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "AtlasFlow HTTP endpoint is failing"
+          description: "The {{ $labels.service }} HTTP check for {{ $labels.instance }} has failed for at least two minutes."
+
+      - alert: AtlasFlowTCPProbeFailed
+        expr: probe_success{job="tcp-probes"} == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "AtlasFlow TCP endpoint is unavailable"
+          description: "The {{ $labels.service }} TCP check for {{ $labels.instance }} has failed for at least two minutes."
+
+      - alert: AtlasFlowKafkaConsumerLagHigh
+        expr: kafka_consumergroup_lag > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kafka consumer group lag is high"
+          description: "Consumer group {{ $labels.consumergroup }} has lag {{ $value }} on topic {{ $labels.topic }} partition {{ $labels.partition }}."

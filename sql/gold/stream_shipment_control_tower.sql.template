@@ -1,0 +1,128 @@
+SET 'execution.runtime-mode' = 'streaming';
+SET 'execution.checkpointing.interval' = '10s';
+SET 'execution.checkpointing.mode' = 'EXACTLY_ONCE';
+SET 'execution.checkpointing.timeout' = '60s';
+SET 'execution.checkpointing.tolerable-failed-checkpoints' = '3';
+SET 'state.checkpoints.dir' = 'file:///opt/flink/checkpoints';
+SET 'state.savepoints.dir' = 'file:///opt/flink/savepoints';
+SET 'table.local-time-zone' = 'UTC';
+SET 'pipeline.name' = 'atlasflow-gold-control-tower-stream';
+CREATE CATALOG atlasflow WITH (
+  'type' = 'iceberg', 'catalog-impl' = 'org.apache.iceberg.rest.RESTCatalog',
+  'uri' = 'http://iceberg-rest:8181', 'warehouse' = 's3://warehouse/',
+  'io-impl' = 'org.apache.iceberg.aws.s3.S3FileIO',
+  's3.endpoint' = 'http://object-store:9000',
+  's3.access-key-id' = '__RUSTFS_ACCESS_KEY__',
+  's3.secret-access-key' = '__RUSTFS_SECRET_KEY__', 's3.path-style-access' = 'true'
+);
+CREATE TEMPORARY TABLE cdc_stream (
+  source_table STRING, operation STRING, entity_id STRING, event_time TIMESTAMP_LTZ(3),
+  customer_id STRING, customer_name STRING, customer_segment STRING, customer_country STRING,
+  order_id STRING, external_order_ref STRING, order_customer_id STRING, order_status STRING,
+  product_sku STRING, order_quantity INT, order_value STRING, currency STRING,
+  order_created_at STRING, promised_delivery_at STRING, destination_country STRING,
+  warehouse_id STRING, warehouse_name STRING, region STRING,
+  on_hand_quantity INT, reserved_quantity INT, damaged_quantity INT,
+  carrier_id STRING, carrier_name STRING, service_level STRING, home_region STRING,
+  shipment_id STRING, shipment_order_id STRING, shipment_carrier_id STRING,
+  origin_warehouse_id STRING, shipment_status STRING, planned_arrival_at STRING, actual_delivery_at STRING,
+  tracking_event_id STRING, tracking_shipment_id STRING, tracking_event_type STRING,
+  tracking_event_time STRING, tracking_location STRING, tracking_delay_minutes INT,
+  disruption_id STRING, disruption_shipment_id STRING, disruption_type STRING,
+  disruption_severity STRING, disruption_location STRING, disruption_started_at STRING,
+  disruption_expected_delay_minutes INT, disruption_active STRING,
+  quality_status STRING, kafka_topic STRING, kafka_partition INT, kafka_offset BIGINT,
+  raw_payload STRING, ingested_at TIMESTAMP_LTZ(3),
+  -- Keep the initial Iceberg history scan safe: all historical CDC rows must participate in state rebuilding.
+  WATERMARK FOR event_time AS event_time - INTERVAL '99' YEAR
+) WITH (
+  'connector' = 'iceberg', 'catalog-name' = 'atlasflow', 'catalog-type' = 'rest',
+  'catalog-database' = 'silver', 'catalog-table' = 'cdc_changes',
+  'uri' = 'http://iceberg-rest:8181', 'warehouse' = 's3://warehouse/',
+  'io-impl' = 'org.apache.iceberg.aws.s3.S3FileIO',
+  's3.endpoint' = 'http://object-store:9000',
+  's3.access-key-id' = '__RUSTFS_ACCESS_KEY__',
+  's3.secret-access-key' = '__RUSTFS_SECRET_KEY__', 's3.path-style-access' = 'true',
+  'streaming' = 'true', 'starting-strategy' = 'TABLE_SCAN_THEN_INCREMENTAL', 'monitor-interval' = '5s'
+);
+
+CREATE TEMPORARY VIEW latest_versions AS
+SELECT *, ROW_NUMBER() OVER (
+  PARTITION BY source_table, entity_id
+  ORDER BY event_time DESC
+) AS row_rank
+FROM cdc_stream
+WHERE quality_status = 'VALID' AND entity_id IS NOT NULL;
+
+CREATE TEMPORARY VIEW current_rows AS
+SELECT * FROM latest_versions WHERE row_rank = 1 AND operation <> 'd';
+
+CREATE TEMPORARY VIEW customers_model AS
+SELECT customer_id, customer_name, customer_segment FROM current_rows WHERE source_table = 'customers';
+CREATE TEMPORARY VIEW orders_model AS
+SELECT order_id, external_order_ref, order_customer_id, order_status, product_sku, order_quantity, destination_country
+FROM current_rows WHERE source_table = 'orders';
+CREATE TEMPORARY VIEW shipments_model AS
+SELECT shipment_id, shipment_order_id, shipment_carrier_id, origin_warehouse_id, shipment_status
+FROM current_rows WHERE source_table = 'shipments';
+CREATE TEMPORARY VIEW carriers_model AS
+SELECT carrier_id, carrier_name FROM current_rows WHERE source_table = 'carriers';
+CREATE TEMPORARY VIEW inventory_model AS
+SELECT warehouse_id, product_sku, MAX(region) AS region,
+       CAST(SUM(COALESCE(on_hand_quantity, 0) - COALESCE(reserved_quantity, 0) - COALESCE(damaged_quantity, 0)) AS INT) AS available_to_promise
+FROM current_rows WHERE source_table = 'inventory_balances'
+GROUP BY warehouse_id, product_sku;
+
+CREATE TEMPORARY VIEW tracking_ranked_model AS
+SELECT tracking_shipment_id, tracking_event_type, tracking_event_time, tracking_location, tracking_delay_minutes, event_rank
+FROM (
+  SELECT tracking_shipment_id, tracking_event_type, tracking_event_time, tracking_location, tracking_delay_minutes,
+         ROW_NUMBER() OVER (PARTITION BY tracking_shipment_id ORDER BY event_time DESC, kafka_partition DESC, kafka_offset DESC) AS event_rank
+  FROM current_rows WHERE source_table = 'tracking_events'
+) ranked_tracking
+WHERE event_rank <= 10000;
+CREATE TEMPORARY VIEW latest_tracking_model AS
+SELECT * FROM tracking_ranked_model WHERE event_rank = 1;
+CREATE TEMPORARY VIEW disruption_summary_model AS
+SELECT disruption_shipment_id AS shipment_id, COUNT(*) AS active_disruption_count,
+       CAST(MAX(disruption_expected_delay_minutes) AS INT) AS expected_disruption_delay_minutes
+FROM current_rows WHERE source_table = 'disruptions' AND LOWER(disruption_active) = 'true'
+GROUP BY disruption_shipment_id;
+
+-- The keyed sink receives updates as source entities, inventory and tracking change.
+INSERT INTO atlasflow.gold.shipment_control_tower
+SELECT
+  s.shipment_id, s.shipment_order_id, o.external_order_ref,
+  c.customer_id, c.customer_name, c.customer_segment,
+  s.shipment_status, carrier.carrier_id, carrier.carrier_name,
+  s.origin_warehouse_id, inv.region, o.destination_country,
+  o.product_sku, o.order_quantity, inv.available_to_promise,
+  track.tracking_event_type, track.tracking_event_time, track.tracking_location, track.tracking_delay_minutes,
+  COALESCE(disrupt.active_disruption_count, 0), COALESCE(disrupt.expected_disruption_delay_minutes, 0),
+  inv.available_to_promise IS NOT NULL AND inv.available_to_promise < COALESCE(o.order_quantity, 0),
+  CASE
+    WHEN LOWER(s.shipment_status) IN ('delayed', 'exception') THEN 'HIGH'
+    WHEN LOWER(track.tracking_event_type) IN ('exception', 'customs_hold', 'delivery_attempt_failed') THEN 'HIGH'
+    WHEN COALESCE(disrupt.active_disruption_count, 0) > 0 THEN 'HIGH'
+    WHEN inv.available_to_promise IS NOT NULL AND inv.available_to_promise < o.order_quantity THEN 'HIGH'
+    WHEN LOWER(s.shipment_status) = 'delivered' THEN 'LOW'
+    WHEN LOWER(track.tracking_event_type) IN ('delay', 'delayed') THEN 'MEDIUM'
+    ELSE 'WATCH'
+  END,
+  CASE
+    WHEN LOWER(s.shipment_status) IN ('delayed', 'exception') THEN 'Shipment status indicates a delay or exception'
+    WHEN LOWER(track.tracking_event_type) IN ('exception', 'customs_hold', 'delivery_attempt_failed') THEN 'Latest tracking event indicates an exception'
+    WHEN COALESCE(disrupt.active_disruption_count, 0) > 0 THEN 'An active logistics disruption is linked to this shipment'
+    WHEN inv.available_to_promise IS NOT NULL AND inv.available_to_promise < o.order_quantity THEN 'Available inventory is below the order quantity'
+    WHEN LOWER(s.shipment_status) = 'delivered' THEN 'Shipment is delivered'
+    WHEN LOWER(track.tracking_event_type) IN ('delay', 'delayed') THEN 'Latest tracking event reports a delay'
+    ELSE 'No high-risk signal detected'
+  END,
+  CURRENT_TIMESTAMP, 'STREAMING'
+FROM shipments_model s
+JOIN orders_model o ON o.order_id = s.shipment_order_id
+LEFT JOIN customers_model c ON c.customer_id = o.order_customer_id
+LEFT JOIN carriers_model carrier ON carrier.carrier_id = s.shipment_carrier_id
+LEFT JOIN inventory_model inv ON inv.warehouse_id = s.origin_warehouse_id AND inv.product_sku = o.product_sku
+LEFT JOIN latest_tracking_model track ON track.tracking_shipment_id = s.shipment_id
+LEFT JOIN disruption_summary_model disrupt ON disrupt.shipment_id = s.shipment_id;

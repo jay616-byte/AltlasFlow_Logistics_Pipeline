@@ -1,0 +1,32 @@
+name: AtlasFlow static validation
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: atlasflow-static-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: Validate contracts, configs, SQL assets and Python syntax
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+      - name: Install validator dependency
+        run: python -m pip install -r requirements.txt
+      - name: Validate AtlasFlow assets
+        run: python scripts/check-atlasflow-static.py --ci
